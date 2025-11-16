@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import { Button } from '@/components/ui/button';
 import 'leaflet/dist/leaflet.css';
 import type { Map as LeafletMap } from 'leaflet';
-import { useMap } from 'react-leaflet'; // new import
+import { useMap } from 'react-leaflet';
 
 const MapContainer = dynamic(
   () => import('react-leaflet').then((mod) => mod.MapContainer),
@@ -19,6 +19,14 @@ const GeoJSON = dynamic(
   () => import('react-leaflet').then((mod) => mod.GeoJSON),
   { ssr: false }
 );
+const Marker = dynamic(
+  () => import('react-leaflet').then((mod) => mod.Marker),
+  { ssr: false }
+);
+const Popup = dynamic(
+  () => import('react-leaflet').then((mod) => mod.Popup),
+  { ssr: false }
+);
 
 const center: [number, number] = [40.7128, -74.006];
 
@@ -26,6 +34,7 @@ export default function MapPage() {
   const [geoJsonData, setGeoJsonData] = useState<any>(null);
   const [activeLayer, setActiveLayer] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [householdData, setHouseholdData] = useState<any>(null);
   const mapRef = useRef<LeafletMap | null>(null);
 
   const availableLayers = [1, 2, 3, 4, 5]; // manually define if detection removed
@@ -55,11 +64,19 @@ export default function MapPage() {
 
       const zipBuffer = await response.arrayBuffer();
 
-      // Convert zip to GeoJSON
+      // Convert zip to GeoJSON - this will include all data from DBF files
       const geojson = await shp.default(zipBuffer);
 
       setGeoJsonData(geojson);
       setActiveLayer(layerNumber);
+
+      // For layer 2 (points), extract household data from the geojson properties
+      if (layerNumber === 2) {
+        const extractedHouseholdData = extractHouseholdDataFromGeoJSON(geojson);
+        setHouseholdData(extractedHouseholdData);
+      } else {
+        setHouseholdData(null);
+      }
 
       // Fit map bounds
       if (mapRef.current && geojson) {
@@ -71,6 +88,122 @@ export default function MapPage() {
       alert(`Error loading layer ${layerNumber}: ${err.message}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Extract household data from GeoJSON properties (from DBF file)
+  const extractHouseholdDataFromGeoJSON = (geojson: any) => {
+    const data: { [key: string]: any } = {};
+    
+    if (geojson?.features) {
+      geojson.features.forEach((feature: any, index: number) => {
+        const properties = feature.properties || {};
+        
+        // Try different possible ID field names
+        const possibleIds = ['id', 'ID', 'fid', 'FID', 'objectid', 'OBJECTID', 'gid', 'GID'];
+        let featureId = null;
+        
+        for (const idField of possibleIds) {
+          if (properties[idField] !== undefined) {
+            featureId = properties[idField];
+            break;
+          }
+        }
+        
+        // If no ID found, use array index
+        if (featureId === null) {
+          featureId = index;
+        }
+        
+        // Store all properties as household data
+        const householdInfo = Object.entries(properties)
+          .filter(([key, value]) => value !== null && value !== undefined && value !== '')
+          .map(([key, value]) => `${key}: ${value}`)
+          .join('<br/>');
+        
+        data[featureId] = householdInfo;
+      });
+    }
+    
+    console.log('Extracted household data:', data); // Debug log
+    return data;
+  };
+
+  // Custom point to layer function for markers
+  const pointToLayer = (feature: any, latlng: any) => {
+    if (typeof window !== 'undefined') {
+      const L = require('leaflet');
+      
+      try {
+        // Try to create custom icon with fallback
+        const customIcon = new L.Icon({
+          iconUrl: 'data:image/svg+xml;base64,' + btoa(`
+            <svg width="25" height="41" viewBox="0 0 25 41" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12.5 0C5.6 0 0 5.6 0 12.5S12.5 41 12.5 41 25 19.4 25 12.5 19.4 0 12.5 0z" fill="#10b981"/>
+              <circle cx="12.5" cy="12.5" r="6" fill="white"/>
+            </svg>
+          `),
+          iconSize: [25, 41],
+          iconAnchor: [12, 41],
+          popupAnchor: [1, -34]
+        });
+
+        return L.marker(latlng, { icon: customIcon });
+      } catch (error) {
+        // Fallback to circle marker if icon creation fails
+        return L.circleMarker(latlng, {
+          radius: 8,
+          fillColor: '#10b981',
+          color: '#ffffff',
+          weight: 2,
+          opacity: 1,
+          fillOpacity: 0.8
+        });
+      }
+    }
+    return null;
+  };
+
+  // Handle popup content for points
+  const onEachFeature = (feature: any, layer: any) => {
+    if (feature.geometry.type === 'Point' && activeLayer === 2) {
+      const properties = feature.properties || {};
+      
+      // Try to find the feature ID using various possible field names
+      const possibleIds = ['id', 'ID', 'fid', 'FID', 'objectid', 'OBJECTID', 'gid', 'GID'];
+      let featureId = 'Unknown';
+      
+      for (const idField of possibleIds) {
+        if (properties[idField] !== undefined) {
+          featureId = properties[idField];
+          break;
+        }
+      }
+      
+      // If no ID found, try to match by array index
+      if (featureId === 'Unknown' && geoJsonData?.features) {
+        const featureIndex = geoJsonData.features.findIndex((f: any) => f === feature);
+        if (featureIndex !== -1) {
+          featureId = featureIndex;
+        }
+      }
+      
+      const householdInfo = householdData?.[featureId];
+      
+      const popupContent = `
+        <div style="max-width: 300px;">
+          <strong>Feature ID:</strong> ${featureId}<br/><br/>
+          ${householdInfo ? `<strong>Household Data:</strong><br/>${householdInfo}` : `
+            <strong>Available Properties:</strong><br/>
+            ${Object.entries(properties)
+              .filter(([key, value]) => value !== null && value !== undefined && value !== '')
+              .map(([key, value]) => `${key}: ${value}`)
+              .join('<br/>') || 'No data available'}
+          `}
+        </div>
+      `;
+      
+      layer.bindPopup(popupContent);
     }
   };
 
@@ -109,6 +242,13 @@ export default function MapPage() {
       return layerStyles[activeLayer];
     }
     return { color: '#3b82f6', weight: 2, fillColor: '#3b82f6', fillOpacity: 0.4 };
+  };
+
+  // Determine if current layer has points
+  const isPointLayer = () => {
+    return geoJsonData?.features?.some((feature: any) => 
+      feature.geometry?.type === 'Point'
+    );
   };
 
   // MapListener: capture the Leaflet map instance from react-leaflet context
@@ -156,9 +296,11 @@ export default function MapPage() {
 
         {geoJsonData && (
           <GeoJSON
-            key={activeLayer}
+            key={`${activeLayer}-${geoJsonData.features?.length}`}
             data={geoJsonData}
-            style={getStyle()}
+            style={isPointLayer() ? undefined : getStyle()}
+            pointToLayer={isPointLayer() ? pointToLayer : undefined}
+            onEachFeature={onEachFeature}
           />
         )}
       </MapContainer>
