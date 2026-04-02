@@ -293,7 +293,7 @@ export default function MapPage() {
 
         {/* Local JP2 imagery tiles */}
         <TileLayer
-          url="/tiles/{z}/{x}/{y}.jpg"
+          url="https://cdn.skyjumper.in/skykids/tiles/{z}/{x}/{y}.jpg"
           minZoom={12}
           maxZoom={20}
           tms={false}
