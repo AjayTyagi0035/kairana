@@ -28,7 +28,7 @@ const Popup = dynamic(
   { ssr: false }
 );
 
-const center: [number, number] = [40.7128, -74.006];
+const center: [number, number] = [29.4, 77.17];
 
 export default function MapPage() {
   const [geoJsonData, setGeoJsonData] = useState<any>(null);
@@ -283,15 +283,21 @@ export default function MapPage() {
       {/* Map */}
       <MapContainer
         center={center}
-        zoom={13}
+        zoom={14}
+        minZoom={12}
+        maxZoom={20}
         style={{ height: '100%', width: '100%' }}
       >
         {/* insert listener to populate mapRef */}
         <MapListener />
 
+        {/* Local JP2 imagery tiles */}
         <TileLayer
-          attribution='&copy; OpenStreetMap contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          url="/tiles/{z}/{x}/{y}.jpg"
+          minZoom={12}
+          maxZoom={20}
+          tms={false}
+          attribution='Local imagery'
         />
 
         {geoJsonData && (
